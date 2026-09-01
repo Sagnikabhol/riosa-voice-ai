@@ -1,6 +1,6 @@
-# 🤖 NOVA - Voice AI Assistant
+# 🤖 Riosa - Voice AI Assistant
 
-NOVA is a voice-based AI assistant built using Python. It listens to the user's voice, converts speech into text, sends the text to Google Gemini, and converts Gemini's response back into speech.
+Riosa is a voice-based AI assistant built using Python. It listens to the user's voice, converts speech into text, sends the text to Google Gemini, and converts Gemini's response back into speech.
 
 The project also includes a Streamlit-based user interface for a more interactive experience.
 
