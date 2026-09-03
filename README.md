@@ -5,6 +5,9 @@ Riosa is a voice-based AI assistant built using Python. It listens to the user's
 The project also includes a Streamlit-based user interface for a more interactive experience.
 
 ---
+## 📸 Screenshot
+
+![Riosa Voice AI Assistant](screenshots/riosa-ui.png)
 
 ## 🚀 Features
 
