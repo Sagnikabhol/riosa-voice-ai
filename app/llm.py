@@ -1,205 +1,137 @@
 import os
-
+import sys
 from dotenv import load_dotenv
 from google import genai
 
+# Ensure UTF-8 output on Windows consoles to prevent charmap errors with emojis
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # ---------------------------------------
 # Load environment variables
 # ---------------------------------------
-
 load_dotenv()
 
 api_key = os.getenv("GEMINI_API_KEY")
-
 if not api_key:
     raise ValueError(
         "GEMINI_API_KEY was not found. "
         "Please check your .env file."
     )
 
-
 # ---------------------------------------
 # Create Gemini client
 # ---------------------------------------
-
 client = genai.Client(api_key=api_key)
 
+# Configurable model with recommended defaults
+DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+FALLBACK_MODELS = ["gemini-flash-latest", "gemini-2.5-flash-lite"]
 
 # ---------------------------------------
 # Conversation memory
 # ---------------------------------------
-
 conversation_history = []
 
 
 # ---------------------------------------
 # Voice assistant instructions
 # ---------------------------------------
-
 SYSTEM_INSTRUCTION = """
-You are Riosa, a helpful voice AI assistant.
+You are Riosa, an interactive and friendly voice AI assistant.
 
-Your responses will be spoken aloud, so keep them
-short, clear, natural, and conversational.
-
-Rules:
-- Usually answer in 1 to 3 sentences.
-- Keep simple questions very short.
-- Use simple and easy-to-understand language.
-- Do not use Markdown.
-- Do not use headings.
-- Do not use bullet points or numbered lists.
-- Do not repeat the user's question.
-- Do not give long explanations unless the user specifically asks.
-- If the user asks for a detailed explanation, provide more detail.
-- Do not add unnecessary information.
-- Sound friendly and natural.
+Your responses will be spoken aloud and displayed on screen, so keep them:
+- Short, clear, natural, and conversational.
+- Usually 1 to 3 sentences unless the user explicitly requests more detail.
+- Simple and easy to understand.
+- Friendly and helpful.
+- Avoid markdown headers or excessive bullet points that sound awkward when spoken aloud.
 """
 
 
-def ask_llm(text):
+def clear_history():
+    """Clear conversation history memory."""
+    global conversation_history
+    conversation_history = []
 
-    # ---------------------------------------
-    # Check empty input
-    # ---------------------------------------
+
+def get_history():
+    """Return a copy of the current conversation history."""
+    return list(conversation_history)
+
+
+def ask_llm(text):
+    """
+    Send user prompt to Google Gemini and return assistant response.
+    Maintains multi-turn context memory.
+    """
+    global conversation_history
 
     if not text or not text.strip():
         return "I didn't receive a question."
 
-
-    # ---------------------------------------
-    # Add user message
-    # ---------------------------------------
-
     user_message = text.strip()
 
-    conversation_history.append(
-        {
-            "role": "user",
-            "text": user_message
-        }
-    )
+    # Append user message to history
+    conversation_history.append({
+        "role": "user",
+        "text": user_message
+    })
 
+    # Build prompt with system instructions and recent conversation
+    conversation = SYSTEM_INSTRUCTION.strip() + "\n\nConversation History:\n"
 
-    # ---------------------------------------
-    # Build conversation
-    # ---------------------------------------
+    # Keep recent context (last 12 turns) to stay within reasonable limits
+    recent_messages = conversation_history[-12:]
+    for message in recent_messages:
+        role = "User" if message["role"] == "user" else "Assistant"
+        conversation += f"\n{role}: {message['text']}"
 
-    conversation = SYSTEM_INSTRUCTION
+    conversation += "\nAssistant:"
 
-    conversation += "\n\nConversation:\n"
+    # Try primary model then fallback models
+    models_to_try = [DEFAULT_MODEL] + [m for m in FALLBACK_MODELS if m != DEFAULT_MODEL]
 
-    for message in conversation_history:
-
-        if message["role"] == "user":
-
-            conversation += (
-                f"\nUser: {message['text']}"
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=conversation
             )
 
-        elif message["role"] == "assistant":
+            answer = response.text
+            if answer and answer.strip():
+                answer = answer.strip()
+                conversation_history.append({
+                    "role": "assistant",
+                    "text": answer
+                })
+                return answer
 
-            conversation += (
-                f"\nAssistant: {message['text']}"
-            )
+        except Exception as error:
+            print(f"Model {model_name} error: {error}")
+            continue
 
+    # If all models fail, remove user message so memory is not corrupted
+    if conversation_history and conversation_history[-1]["role"] == "user":
+        conversation_history.pop()
 
-    # ---------------------------------------
-    # Send request to Gemini
-    # ---------------------------------------
-
-    try:
-
-        print("🤖 Sending request to Gemini...")
-
-        response = client.models.generate_content(
-            model="gemini-3.5-flash-lite",
-            contents=conversation
-        )
-
-        answer = response.text
-
-
-        # -----------------------------------
-        # Check response
-        # -----------------------------------
-
-        if not answer:
-
-            print("❌ Gemini returned an empty response.")
-
-            return "Sorry, I couldn't generate a response."
-
-
-        answer = answer.strip()
-
-
-        # -----------------------------------
-        # Save response
-        # -----------------------------------
-
-        conversation_history.append(
-            {
-                "role": "assistant",
-                "text": answer
-            }
-        )
-
-
-        print("✅ Gemini response received.")
-
-        return answer
-
-
-    except Exception as error:
-
-        # IMPORTANT:
-        # Show the REAL Gemini error in terminal.
-
-        print("\n" + "=" * 60)
-        print("❌ GEMINI API ERROR")
-        print("=" * 60)
-
-        print(f"Error type: {type(error).__name__}")
-        print(f"Error details: {error}")
-
-        print("=" * 60 + "\n")
-
-
-        # Remove failed user message
-        # so conversation memory does not become corrupted.
-
-        if conversation_history:
-
-            if (
-                conversation_history[-1]["role"] == "user"
-                and
-                conversation_history[-1]["text"] == user_message
-            ):
-                conversation_history.pop()
-
-
-        return (
-            "Sorry, I'm having trouble connecting "
-            "to the AI service."
-        )
+    return "Sorry, I'm having trouble connecting to the AI service right now. Please try again."
 
 
 # ---------------------------------------
-# Test Gemini directly
+# Quick standalone test
 # ---------------------------------------
-
 if __name__ == "__main__":
-
     print("=" * 50)
     print("Riosa Voice AI - Gemini Test")
     print("=" * 50)
 
     question = "What is Python?"
-
     print(f"\n👤 You: {question}")
-
     answer = ask_llm(question)
-
-    print(f"\n🤖 Riosa: {answer}")
+    print(f"\n🤖 Riosa: {answer}\n")
