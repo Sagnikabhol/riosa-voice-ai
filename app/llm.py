@@ -16,39 +16,49 @@ if hasattr(sys.stdout, "reconfigure"):
 # ---------------------------------------
 load_dotenv()
 
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
+
+def get_api_key():
+    """
+    Retrieve Gemini API key from environment, .env file, or Streamlit Cloud Secrets.
+    Never crashes if key is not yet set.
+    """
+    key = os.getenv("GEMINI_API_KEY")
+    if key and key.strip():
+        return key.strip()
+
     try:
         import streamlit as st
-        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
-            api_key = st.secrets["GEMINI_API_KEY"]
+        if hasattr(st, "secrets"):
+            if "GEMINI_API_KEY" in st.secrets:
+                return str(st.secrets["GEMINI_API_KEY"]).strip()
+            # Also check if it was nested
+            if "general" in st.secrets and "GEMINI_API_KEY" in st.secrets["general"]:
+                return str(st.secrets["general"]["GEMINI_API_KEY"]).strip()
     except Exception:
         pass
 
-if not api_key:
-    raise ValueError(
-        "GEMINI_API_KEY was not found. "
-        "Please check your .env file or Streamlit Cloud Secrets."
-    )
+    return None
 
-# ---------------------------------------
-# Create Gemini client
-# ---------------------------------------
-client = genai.Client(api_key=api_key)
+
+def get_client():
+    """Create or return a Google GenAI client instance."""
+    key = get_api_key()
+    if not key:
+        return None
+    try:
+        return genai.Client(api_key=key)
+    except Exception as error:
+        print(f"Error creating GenAI client: {error}")
+        return None
+
 
 # Configurable model with recommended defaults
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 FALLBACK_MODELS = ["gemini-flash-latest", "gemini-2.5-flash-lite"]
 
-# ---------------------------------------
 # Conversation memory
-# ---------------------------------------
 conversation_history = []
 
-
-# ---------------------------------------
-# Voice assistant instructions
-# ---------------------------------------
 SYSTEM_INSTRUCTION = """
 You are Riosa, an interactive and friendly voice AI assistant.
 
@@ -79,6 +89,13 @@ def ask_llm(text):
     """
     global conversation_history
 
+    client = get_client()
+    if not client:
+        return (
+            "⚠️ GEMINI_API_KEY is not configured yet. "
+            "Please add GEMINI_API_KEY to your Streamlit Cloud Secrets or .env file to activate Riosa."
+        )
+
     if not text or not text.strip():
         return "I didn't receive a question."
 
@@ -93,7 +110,6 @@ def ask_llm(text):
     # Build prompt with system instructions and recent conversation
     conversation = SYSTEM_INSTRUCTION.strip() + "\n\nConversation History:\n"
 
-    # Keep recent context (last 12 turns) to stay within reasonable limits
     recent_messages = conversation_history[-12:]
     for message in recent_messages:
         role = "User" if message["role"] == "user" else "Assistant"
@@ -124,16 +140,12 @@ def ask_llm(text):
             print(f"Model {model_name} error: {error}")
             continue
 
-    # If all models fail, remove user message so memory is not corrupted
     if conversation_history and conversation_history[-1]["role"] == "user":
         conversation_history.pop()
 
     return "Sorry, I'm having trouble connecting to the AI service right now. Please try again."
 
 
-# ---------------------------------------
-# Quick standalone test
-# ---------------------------------------
 if __name__ == "__main__":
     print("=" * 50)
     print("Riosa Voice AI - Gemini Test")

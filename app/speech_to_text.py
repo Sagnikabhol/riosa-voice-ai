@@ -93,26 +93,28 @@ def transcribe_audio_buffer(audio_bytes, mime_type="audio/wav"):
 
     # 1. Primary: Google Gemini multimodal audio model (handles WebM, MP4, AAC from phones natively)
     try:
-        from llm import client, DEFAULT_MODEL
+        from llm import get_client, DEFAULT_MODEL
         from google.genai import types
 
-        part = types.Part.from_bytes(data=audio_bytes, mime_type=resolved_mime)
-        prompt = (
-            "Transcribe the spoken audio precisely into text. "
-            "Output ONLY the transcribed text. Do not add quotes, introductory phrases, or explanations. "
-            "If the audio contains no discernible speech or only noise, reply with UNINTELLIGIBLE."
-        )
+        client = get_client()
+        if client:
+            part = types.Part.from_bytes(data=audio_bytes, mime_type=resolved_mime)
+            prompt = (
+                "Transcribe the spoken audio precisely into text. "
+                "Output ONLY the transcribed text. Do not add quotes, introductory phrases, or explanations. "
+                "If the audio contains no discernible speech or only noise, reply with UNINTELLIGIBLE."
+            )
 
-        response = client.models.generate_content(
-            model=DEFAULT_MODEL,
-            contents=[part, prompt]
-        )
+            response = client.models.generate_content(
+                model=DEFAULT_MODEL,
+                contents=[part, prompt]
+            )
 
-        if response.text and response.text.strip():
-            result = response.text.strip()
-            if "UNINTELLIGIBLE" in result.upper() and len(result) < 25:
-                return None
-            return result
+            if response.text and response.text.strip():
+                result = response.text.strip()
+                if "UNINTELLIGIBLE" in result.upper() and len(result) < 25:
+                    return None
+                return result
     except Exception as gemini_err:
         print(f"Gemini audio transcription fallback error: {gemini_err}")
 

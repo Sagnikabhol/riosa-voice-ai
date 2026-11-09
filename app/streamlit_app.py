@@ -12,6 +12,7 @@ import json
 import time
 
 from voice_engine import RiosaVoiceEngine
+from llm import get_api_key
 
 
 # ============================================================
@@ -503,6 +504,22 @@ div.stButton > button:hover {
 </style>
 """)
 
+
+# ============================================================
+# API KEY CHECK (GRACEFUL CLOUD SETUP)
+# ============================================================
+
+if not get_api_key():
+    with st.sidebar:
+        st.warning("⚠️ **Gemini API Key Needed**")
+        st.write(
+            "To activate Riosa on Streamlit Cloud, either enter your key below or add it to "
+            "**Settings ➔ Secrets** as `GEMINI_API_KEY`."
+        )
+        entered_key = st.text_input("Gemini API Key", type="password")
+        if entered_key and entered_key.strip():
+            os.environ["GEMINI_API_KEY"] = entered_key.strip()
+            st.rerun()
 
 # ============================================================
 # HEADER
