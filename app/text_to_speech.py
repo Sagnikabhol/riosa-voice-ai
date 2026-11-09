@@ -1,6 +1,6 @@
 import sys
+import io
 import threading
-import pyttsx3
 
 # Ensure UTF-8 output on Windows consoles
 if hasattr(sys.stdout, "reconfigure"):
@@ -13,8 +13,29 @@ if hasattr(sys.stdout, "reconfigure"):
 _tts_lock = threading.Lock()
 
 
-def _speak_worker(text, rate=170, volume=1.0):
-    """Internal worker that runs pyttsx3 safely with Windows COM initialized."""
+def generate_speech_audio(text: str) -> bytes | None:
+    """
+    Generate MP3 speech audio bytes using Google Text-to-Speech (gTTS).
+    Works in all cloud environments (Streamlit Cloud, Linux, Docker) and mobile browsers.
+    Returns raw MP3 bytes that can be played with st.audio(bytes, format='audio/mp3').
+    """
+    if not text or not text.strip():
+        return None
+
+    try:
+        from gtts import gTTS
+        buf = io.BytesIO()
+        tts = gTTS(text=text.strip(), lang="en", slow=False)
+        tts.write_to_fp(buf)
+        buf.seek(0)
+        return buf.getvalue()
+    except Exception as error:
+        print(f"gTTS audio generation error: {error}")
+        return None
+
+
+def _speak_local_worker(text, rate=170, volume=1.0):
+    """Local offline speech synthesis using pyttsx3 (for desktop CLI)."""
     try:
         import pythoncom
         pythoncom.CoInitialize()
@@ -22,6 +43,7 @@ def _speak_worker(text, rate=170, volume=1.0):
         pass
 
     try:
+        import pyttsx3
         with _tts_lock:
             engine = pyttsx3.init()
             engine.setProperty("rate", rate)
@@ -30,29 +52,29 @@ def _speak_worker(text, rate=170, volume=1.0):
             engine.runAndWait()
             engine.stop()
     except Exception as error:
-        print(f"Text-to-speech error: {error}")
+        print(f"Local pyttsx3 error: {error}")
 
 
 def speak(text, rate=170, volume=1.0, async_mode=False):
     """
-    Convert text into spoken audio.
-    If async_mode is True, speaks in a background daemon thread so it never blocks callers.
+    Speak text using local system audio (CLI mode).
+    If async_mode is True, runs in a daemon thread.
     """
     if not text:
         return
 
     if async_mode:
         t = threading.Thread(
-            target=_speak_worker,
+            target=_speak_local_worker,
             args=(text, rate, volume),
             daemon=True
         )
         t.start()
     else:
-        _speak_worker(text, rate, volume)
+        _speak_local_worker(text, rate, volume)
 
 
 if __name__ == "__main__":
-    print("Testing text-to-speech...")
-    speak("Hello! I am Riosa, your interactive voice AI assistant.", async_mode=False)
-    print("Done speaking.")
+    print("Testing generate_speech_audio...")
+    audio = generate_speech_audio("Hello! I am Riosa, your interactive voice AI.")
+    print("Generated MP3 bytes:", len(audio) if audio else "Failed")
