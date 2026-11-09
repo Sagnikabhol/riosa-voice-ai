@@ -1,9 +1,15 @@
 import sys
+import os
 import threading
 import queue
+
+# Ensure local app path is in sys.path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 import speech_recognition as sr
 import pyttsx3
-
 from llm import ask_llm, clear_history as clear_llm_history
 
 # Ensure UTF-8 output on Windows consoles
@@ -15,9 +21,6 @@ if hasattr(sys.stdout, "reconfigure"):
         pass
 
 
-# ============================================================
-# EXIT COMMANDS
-# ============================================================
 EXIT_COMMANDS = {
     "exit",
     "quit",
@@ -28,15 +31,7 @@ EXIT_COMMANDS = {
 }
 
 
-# ============================================================
-# VOICE ENGINE
-# ============================================================
 class RiosaVoiceEngine:
-    """
-    Background voice engine for continuous PC microphone listening.
-    Communicates via thread-safe queue.
-    """
-
     def __init__(self):
         self.running = False
         self.stop_event = threading.Event()
@@ -44,22 +39,9 @@ class RiosaVoiceEngine:
         self.events = queue.Queue()
         self.engine_lock = threading.Lock()
         self.speech_enabled = True
-        self.speech_rate = 175
-        self.speech_volume = 1.0
 
-    def set_speech_enabled(self, enabled: bool):
-        """Enable or disable spoken audio output."""
-        self.speech_enabled = bool(enabled)
-
-    def set_speech_rate(self, rate: int):
-        """Adjust speech rate (speed)."""
-        self.speech_rate = max(100, min(300, rate))
-
-    # ========================================================
-    # START / STOP
-    # ========================================================
     def start(self):
-        """Start the continuous voice loop in a background thread."""
+        """Start the continuous voice listening loop."""
         if self.running:
             return
 
@@ -73,7 +55,7 @@ class RiosaVoiceEngine:
         self.thread.start()
 
     def stop(self):
-        """Stop the background voice loop."""
+        """Stop the continuous voice listening loop."""
         self.running = False
         self.stop_event.set()
 
@@ -85,15 +67,12 @@ class RiosaVoiceEngine:
 
         self.events.put({"type": "stopped"})
 
-    # ========================================================
-    # SPEAK (THREAD-SAFE & NON-BLOCKING)
-    # ========================================================
     def speak(self, text):
-        """Speak text using pyttsx3 in a thread-safe worker."""
-        if not text or not self.speech_enabled or self.stop_event.is_set():
+        """Speak text aloud using pyttsx3 in a thread-safe way."""
+        if not text or self.stop_event.is_set():
             return
 
-        def _do_speak():
+        def _worker():
             try:
                 import pythoncom
                 pythoncom.CoInitialize()
@@ -103,28 +82,27 @@ class RiosaVoiceEngine:
             try:
                 with self.engine_lock:
                     engine = pyttsx3.init()
-                    engine.setProperty("rate", self.speech_rate)
-                    engine.setProperty("volume", self.speech_volume)
+                    engine.setProperty("rate", 175)
+                    engine.setProperty("volume", 1.0)
                     engine.say(text)
                     engine.runAndWait()
                     engine.stop()
             except Exception as error:
+                print(f"TTS Speech error: {error}")
                 self.events.put({
                     "type": "error",
                     "message": f"TTS Error: {error}"
                 })
 
-        threading.Thread(target=_do_speak, daemon=True).start()
+        threading.Thread(target=_worker, daemon=True).start()
 
-    # ========================================================
-    # LISTEN
-    # ========================================================
     def listen(self):
-        """Listen to microphone and convert to text."""
+        """Listen to microphone and convert speech to text."""
         recognizer = sr.Recognizer()
-        recognizer.energy_threshold = 300
         recognizer.dynamic_energy_threshold = True
-        recognizer.pause_threshold = 0.8
+        recognizer.pause_threshold = 0.7
+        recognizer.phrase_threshold = 0.2
+        recognizer.non_speaking_duration = 0.4
 
         try:
             with sr.Microphone() as source:
@@ -133,34 +111,41 @@ class RiosaVoiceEngine:
                     "value": "listening"
                 })
 
-                recognizer.adjust_for_ambient_noise(source, duration=0.25)
-                audio = recognizer.listen(
-                    source,
-                    timeout=5,
-                    phrase_time_limit=15
-                )
+                # Calibrate ambient noise so microphone picks up speech properly
+                recognizer.adjust_for_ambient_noise(source, duration=0.3)
 
-            text = recognizer.recognize_google(audio)
-            text = text.strip()
+                try:
+                    audio = recognizer.listen(
+                        source,
+                        timeout=5,
+                        phrase_time_limit=12
+                    )
+                except sr.WaitTimeoutError:
+                    return ""
 
-            if text:
+            try:
+                text = recognizer.recognize_google(audio)
+                text = text.strip()
+
+                if text:
+                    self.events.put({
+                        "type": "user",
+                        "message": text
+                    })
+                return text
+
+            except sr.UnknownValueError:
+                # Speech detected but was not intelligible
+                return ""
+            except sr.RequestError as error:
                 self.events.put({
-                    "type": "user",
-                    "message": text
+                    "type": "error",
+                    "message": f"Speech service error: {error}"
                 })
-            return text
+                return ""
 
-        except sr.WaitTimeoutError:
-            return ""
-        except sr.UnknownValueError:
-            return ""
-        except sr.RequestError as error:
-            self.events.put({
-                "type": "error",
-                "message": f"Speech recognition service error: {error}"
-            })
-            return ""
         except Exception as error:
+            print(f"Microphone listen error: {error}")
             self.events.put({
                 "type": "error",
                 "message": f"Microphone error: {error}"
@@ -172,11 +157,35 @@ class RiosaVoiceEngine:
             return False
         return text.lower().strip() in EXIT_COMMANDS
 
-    # ========================================================
-    # MAIN VOICE LOOP
-    # ========================================================
+    def process_text(self, text):
+        """Process typed user text directly."""
+        if not text or not text.strip():
+            return None
+
+        clean_text = text.strip()
+        self.events.put({"type": "user", "message": clean_text})
+
+        if self.is_exit_command(clean_text):
+            goodbye = "Goodbye! Have a great day."
+            self.events.put({"type": "assistant", "message": goodbye})
+            self.speak(goodbye)
+            return goodbye
+
+        self.events.put({"type": "status", "value": "thinking"})
+
+        try:
+            response = ask_llm(clean_text)
+        except Exception as err:
+            response = f"Sorry, I had trouble processing that: {err}"
+
+        self.events.put({"type": "assistant", "message": response})
+        self.events.put({"type": "status", "value": "speaking"})
+        self.speak(response)
+        self.events.put({"type": "status", "value": "ready"})
+        return response
+
     def _voice_loop(self):
-        """Continuous background loop for speech recognition."""
+        """Continuous background voice loop."""
         try:
             while self.running and not self.stop_event.is_set():
                 user_text = self.listen()
@@ -199,6 +208,7 @@ class RiosaVoiceEngine:
                     self.events.put({"type": "stopped"})
                     break
 
+                # Thinking status
                 self.events.put({
                     "type": "status",
                     "value": "thinking"
@@ -209,11 +219,13 @@ class RiosaVoiceEngine:
                 except Exception:
                     response = "Sorry, I couldn't process that. Please try again."
 
+                # Send answer to UI
                 self.events.put({
                     "type": "assistant",
                     "message": response
                 })
 
+                # Speak status & speech
                 self.events.put({
                     "type": "status",
                     "value": "speaking"

@@ -1,401 +1,852 @@
-import streamlit as st
-import html
-import socket
+import sys
 import os
 
-from llm import ask_llm, clear_history
-from speech_to_text import is_microphone_available, transcribe_audio_buffer
-from text_to_speech import generate_speech_audio
+# Ensure local app path is in sys.path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
+import streamlit as st
+import html
+import json
+import time
+
+from voice_engine import RiosaVoiceEngine
+
 
 # ============================================================
 # PAGE CONFIGURATION
 # ============================================================
+
 st.set_page_config(
-    page_title="Riosa - Interactive AI Assistant",
-    page_icon="🤖",
+    page_title="Riosa - Voice AI Assistant",
+    page_icon="🎙️",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# Detect local Wi-Fi IP for direct network access
-def get_local_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return "127.0.0.1"
-
-local_ip = get_local_ip()
-mobile_url = f"http://{local_ip}:8501"
 
 # ============================================================
-# SESSION STATE INITIALIZATION
+# SESSION STATE
 # ============================================================
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "enable_tts" not in st.session_state:
-    st.session_state.enable_tts = True
+if "voice_engine" not in st.session_state:
+    st.session_state.voice_engine = RiosaVoiceEngine()
 
-if "last_processed_audio_id" not in st.session_state:
-    st.session_state.last_processed_audio_id = None
+if "voice_running" not in st.session_state:
+    st.session_state.voice_running = False
+
+if "status" not in st.session_state:
+    st.session_state.status = "ready"
+
+if "last_spoken_count" not in st.session_state:
+    st.session_state.last_spoken_count = 0
+
+
+engine = st.session_state.voice_engine
+
 
 # ============================================================
-# MOBILE & DESKTOP RESPONSIVE CYBERPUNK STYLING
+# FUTURISTIC UI STYLING (EXACT ORIGINAL DESIGN)
 # ============================================================
+
 st.html("""
 <style>
-/* Global background */
+
 html, body, [data-testid="stAppViewContainer"] {
+
     background:
-        radial-gradient(circle at 50% 8%, rgba(55, 85, 170, 0.32), transparent 36%),
-        radial-gradient(circle at 10% 85%, rgba(90, 45, 165, 0.20), transparent 32%),
-        radial-gradient(circle at 90% 75%, rgba(20, 95, 165, 0.20), transparent 32%),
+        radial-gradient(
+            circle at 50% 10%,
+            rgba(55, 80, 150, 0.28),
+            transparent 32%
+        ),
+        radial-gradient(
+            circle at 10% 85%,
+            rgba(90, 40, 150, 0.18),
+            transparent 30%
+        ),
+        radial-gradient(
+            circle at 90% 75%,
+            rgba(20, 90, 150, 0.18),
+            transparent 30%
+        ),
         #080a0f !important;
+
     min-height: 100vh;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    -webkit-font-smoothing: antialiased;
 }
 
+
 [data-testid="stAppViewContainer"]::before {
+
     content: "";
+
     position: fixed;
+
     inset: 0;
+
     background-image:
-        linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px);
-    background-size: 36px 36px;
+        linear-gradient(
+            rgba(255,255,255,0.018) 1px,
+            transparent 1px
+        ),
+        linear-gradient(
+            90deg,
+            rgba(255,255,255,0.018) 1px,
+            transparent 1px
+        );
+
+    background-size: 55px 55px;
+
     pointer-events: none;
+
     z-index: 0;
 }
 
+
 [data-testid="stHeader"] {
-    background: transparent !important;
+    display: none !important;
 }
+
+
+[data-testid="stToolbar"] {
+    display: none !important;
+}
+
 
 footer {
     display: none !important;
 }
 
-/* Container */
+
+#MainMenu {
+    visibility: hidden;
+}
+
+
 .block-container {
-    max-width: 860px !important;
-    padding-top: 15px !important;
-    padding-bottom: 75px !important;
-    padding-left: 1rem !important;
-    padding-right: 1rem !important;
+
+    max-width: 850px !important;
+
+    padding-top: 25px !important;
+
+    padding-bottom: 50px !important;
+
     position: relative;
+
     z-index: 1;
 }
 
-/* HEADER */
-.header-container {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
+
+/* ============================================================
+   HEADER
+   ============================================================ */
+
+.header {
+
     text-align: center;
-    margin-bottom: 20px;
+
+    margin-bottom: 28px;
 }
 
-.logo-orb {
-    width: 72px;
-    height: 72px;
+
+.logo {
+
+    width: 70px;
+    height: 70px;
+
+    margin: auto;
+
     border-radius: 50%;
+
     display: flex;
+
     align-items: center;
     justify-content: center;
-    background: radial-gradient(circle, #2d3c58, #141b27);
-    border: 1px solid #4a5e80;
+
+    background:
+        radial-gradient(
+            circle,
+            #29364e,
+            #151b27
+        );
+
+    border: 1px solid #39475c;
+
     font-size: 34px;
-    box-shadow: 0 0 35px rgba(80,120,220,0.45);
-    animation: floatOrb 3.5s ease-in-out infinite alternate;
+
+    box-shadow:
+        0 0 35px rgba(80,110,190,0.20);
 }
 
-@keyframes floatOrb {
-    from { transform: translateY(0px) scale(1); }
-    to { transform: translateY(-5px) scale(1.03); }
-}
 
-.main-title {
+.title {
+
     color: #ffffff;
-    font-size: 30px;
+
+    font-size: 34px;
+
     font-weight: 700;
+
     margin-top: 10px;
-    letter-spacing: 0.5px;
+
+    letter-spacing: 1px;
 }
 
-.sub-title {
-    color: #8b9ab2;
-    font-size: 13.5px;
-    margin-top: 3px;
+
+.subtitle {
+
+    color: #778194;
+
+    font-size: 14px;
+
+    margin-top: 4px;
 }
 
-.status-badge {
+
+.online {
+
     display: inline-flex;
+
     align-items: center;
+
     gap: 7px;
-    margin-top: 8px;
-    padding: 5px 14px;
+
+    margin-top: 12px;
+
+    padding: 6px 13px;
+
     border-radius: 20px;
-    background: rgba(18,25,38,0.85);
-    border: 1px solid #2d384c;
-    color: #9cb0ce;
+
+    background: rgba(15,20,29,0.8);
+
+    border: 1px solid #293242;
+
+    color: #929bad;
+
     font-size: 11px;
 }
 
-.status-dot {
-    width: 8px;
-    height: 8px;
+
+.dot {
+
+    width: 7px;
+    height: 7px;
+
     border-radius: 50%;
-    background: #34d399;
-    box-shadow: 0 0 8px rgba(52,211,153,0.9);
-    display: inline-block;
+
+    background: #4ade80;
+
+    box-shadow:
+        0 0 10px rgba(74,222,128,0.7);
 }
 
-/* CHAT BUBBLES */
-.user-bubble {
-    background: linear-gradient(135deg, rgba(29, 44, 69, 0.95), rgba(20, 31, 50, 0.95));
-    border: 1px solid #334665;
-    padding: 13px 17px;
-    border-radius: 18px 18px 4px 18px;
-    margin: 10px 0 10px 10%;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-    word-break: break-word;
+
+/* ============================================================
+   VOICE CARD
+   ============================================================ */
+
+.voice-card {
+
+    background:
+        linear-gradient(
+            145deg,
+            rgba(18,23,33,0.96),
+            rgba(10,14,21,0.96)
+        );
+
+    border: 1px solid rgba(75,87,108,0.45);
+
+    border-radius: 34px;
+
+    padding: 48px 25px 40px 25px;
+
+    text-align: center;
+
+    box-shadow:
+        0 25px 80px rgba(0,0,0,0.35),
+        inset 0 1px 0 rgba(255,255,255,0.025);
 }
+
+
+.mic-wrapper {
+
+    width: 170px;
+    height: 170px;
+
+    margin: auto;
+
+    border-radius: 50%;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    background:
+        radial-gradient(
+            circle,
+            #34425c 0%,
+            #202a3b 38%,
+            #121824 68%,
+            #0d1119 100%
+        );
+
+    border: 1px solid #46546b;
+
+    box-shadow:
+        0 0 0 12px rgba(80,100,140,0.035),
+        0 0 0 25px rgba(80,100,140,0.02),
+        0 0 60px rgba(80,110,190,0.20);
+}
+
+
+.mic {
+
+    font-size: 62px;
+
+    filter:
+        drop-shadow(
+            0 0 12px rgba(130,160,220,0.35)
+        );
+}
+
+
+.status {
+
+    color: #ffffff;
+
+    font-size: 23px;
+
+    font-weight: 600;
+
+    margin-top: 23px;
+}
+
+
+.status-description {
+
+    color: #788294;
+
+    font-size: 13px;
+
+    margin-top: 7px;
+}
+
+
+/* ============================================================
+   BUTTON
+   ============================================================ */
+
+div.stButton > button {
+
+    width: 100%;
+
+    height: 64px;
+
+    margin-top: 25px;
+
+    border-radius: 20px;
+
+    border: 1px solid #46546b;
+
+    background:
+        linear-gradient(
+            135deg,
+            #1b2535,
+            #151c29
+        );
+
+    color: #ffffff;
+
+    font-size: 18px;
+
+    font-weight: 700;
+
+    letter-spacing: 0.5px;
+
+    box-shadow:
+        0 10px 30px rgba(0,0,0,0.25);
+
+    transition: all 0.2s ease;
+}
+
+
+div.stButton > button:hover {
+
+    background:
+        linear-gradient(
+            135deg,
+            #26344b,
+            #1b2535
+        );
+
+    border-color: #667791;
+
+    box-shadow:
+        0 10px 35px rgba(70,100,170,0.18);
+
+    transform: translateY(-2px);
+}
+
+
+/* ============================================================
+   CONVERSATION
+   ============================================================ */
+
+.conversation-title {
+
+    color: #aeb7c7;
+
+    font-size: 15px;
+
+    font-weight: 600;
+
+    margin-top: 35px;
+
+    margin-bottom: 14px;
+}
+
+
+.user-bubble {
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(27,40,61,0.95),
+            rgba(20,31,48,0.95)
+        );
+
+    border: 1px solid #2b3b54;
+
+    padding: 15px 18px;
+
+    border-radius:
+        20px 20px 5px 20px;
+
+    margin:
+        10px 0 10px 18%;
+}
+
 
 .ai-bubble {
-    background: linear-gradient(135deg, rgba(18, 24, 34, 0.96), rgba(12, 17, 25, 0.96));
-    border: 1px solid #283344;
-    padding: 13px 17px;
-    border-radius: 18px 18px 18px 4px;
-    margin: 10px 10% 10px 0;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-    word-break: break-word;
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(17,22,31,0.96),
+            rgba(13,17,24,0.96)
+        );
+
+    border: 1px solid #272f3c;
+
+    padding: 15px 18px;
+
+    border-radius:
+        20px 20px 20px 5px;
+
+    margin:
+        10px 18% 10px 0;
 }
 
-.bubble-meta {
-    color: #6d7b93;
+
+.label {
+
+    color: #707b8e;
+
     font-size: 10px;
+
     font-weight: 700;
-    letter-spacing: 0.8px;
-    margin-bottom: 5px;
+
+    letter-spacing: 1px;
+
+    margin-bottom: 6px;
 }
 
-.bubble-text {
+
+.message {
+
     color: #e9edf4;
-    font-size: 14.5px;
+
+    font-size: 15px;
+
     line-height: 1.55;
-    white-space: pre-wrap;
 }
 
-/* FOOTER */
-.footer-text {
+
+.hint {
+
     text-align: center;
-    color: #4f5a6d;
+
+    color: #545e70;
+
+    font-size: 12px;
+
+    margin-top: 18px;
+}
+
+
+.footer {
+
+    text-align: center;
+
+    color: #414957;
+
     font-size: 11px;
+
     margin-top: 35px;
 }
 
-/* MOBILE MEDIA QUERY */
-@media (max-width: 600px) {
-    .block-container {
-        padding-top: 10px !important;
-        padding-left: 0.6rem !important;
-        padding-right: 0.6rem !important;
-    }
-    .main-title {
-        font-size: 25px;
-    }
-    .logo-orb {
-        width: 60px;
-        height: 60px;
-        font-size: 28px;
-    }
-    .user-bubble {
-        margin: 8px 0 8px 4%;
-        padding: 11px 14px;
-    }
-    .ai-bubble {
-        margin: 8px 4% 8px 0;
-        padding: 11px 14px;
-    }
-}
 </style>
 """)
 
-# ============================================================
-# SIDEBAR
-# ============================================================
-with st.sidebar:
-    st.markdown("### 📱 Mobile Access & Deployment")
-    st.info(
-        f"**Local Wi-Fi Access:**\n"
-        f"👉 `{mobile_url}`\n\n"
-        "**Cloud Deployment (Streamlit Cloud, Railway):**\n"
-        "Deploy this repository to get a public HTTPS URL. On HTTPS, mobile microphones work natively anywhere in the world!"
-    )
-
-    st.markdown("---")
-    st.markdown("### 🔊 Audio Settings")
-    st.session_state.enable_tts = st.toggle(
-        "Spoken Voice Output",
-        value=st.session_state.enable_tts,
-        help="When enabled, Riosa speaks answers through your phone or computer speakers."
-    )
-
-    st.markdown("---")
-    st.markdown("### 🧹 Memory")
-    if st.button("🗑️ Clear Conversation", use_container_width=True):
-        st.session_state.messages = []
-        clear_history()
-        st.success("Conversation cleared!")
-        st.rerun()
-
-    st.markdown("---")
-    st.markdown("### 📊 Status & Info")
-    st.write(f"**Gemini Model:** `{os.getenv('GEMINI_MODEL', 'gemini-3.5-flash-lite')}`")
-    mic_status = "Available ✅" if is_microphone_available() else "Ready via Browser/Phone 📱"
-    st.write(f"**Microphone:** {mic_status}")
 
 # ============================================================
 # HEADER
 # ============================================================
-st.html(f"""
-<div class="header-container">
-    <div class="logo-orb">🤖</div>
-    <div class="main-title">Riosa</div>
-    <div class="sub-title">Interactive Voice & Text AI Assistant</div>
-    <div class="status-badge">
-        <span class="status-dot"></span>
-        ONLINE • READY TO TALK OR TYPE
+
+st.html("""
+<div class="header">
+
+    <div class="logo">
+        🤖
     </div>
+
+    <div class="title">
+        Riosa
+    </div>
+
+    <div class="subtitle">
+        Your Personal Voice AI Assistant
+    </div>
+
+    <div class="online">
+        <span class="dot"></span>
+        SYSTEM ONLINE
+    </div>
+
 </div>
 """)
 
+
 # ============================================================
-# VOICE INPUT (PHONE & BROWSER MICROPHONE)
+# READ ENGINE EVENTS
 # ============================================================
-with st.expander("🎙️ Tap to Speak (Phone & Computer Microphone)", expanded=True):
-    recorded_audio = st.audio_input(
-        label="Tap the mic below and speak:",
-        key="phone_and_browser_audio"
+
+events = engine.get_events()
+
+for event in events:
+
+    event_type = event.get("type")
+
+
+    # --------------------------------------------------------
+    # STATUS
+    # --------------------------------------------------------
+
+    if event_type == "status":
+
+        st.session_state.status = (
+            event.get("value", "ready")
+        )
+
+
+    # --------------------------------------------------------
+    # USER MESSAGE
+    # --------------------------------------------------------
+
+    elif event_type == "user":
+
+        message = event.get("message", "")
+
+        if message:
+
+            st.session_state.messages.append(
+                {
+                    "role": "user",
+                    "content": message
+                }
+            )
+
+
+    # --------------------------------------------------------
+    # ASSISTANT MESSAGE
+    # --------------------------------------------------------
+
+    elif event_type == "assistant":
+
+        message = event.get("message", "")
+
+        if message:
+
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": message
+                }
+            )
+
+
+    # --------------------------------------------------------
+    # STOPPED
+    # --------------------------------------------------------
+
+    elif event_type == "stopped":
+
+        st.session_state.voice_running = False
+
+        st.session_state.status = "ready"
+
+
+# ============================================================
+# ENGINE STATUS
+# ============================================================
+
+if not engine.running:
+
+    st.session_state.voice_running = False
+
+    if st.session_state.status not in {
+        "ready",
+        "stopped"
+    }:
+
+        st.session_state.status = "ready"
+
+
+# ============================================================
+# STATUS DISPLAY
+# ============================================================
+
+status = st.session_state.status
+
+
+if status == "listening":
+
+    mic = "🎙️"
+
+    title = "Listening..."
+
+    description = (
+        "Speak naturally. I'm listening."
     )
 
-    if recorded_audio is not None:
-        audio_id = getattr(recorded_audio, "file_id", None) or recorded_audio.name
-        if st.session_state.last_processed_audio_id != audio_id:
-            st.session_state.last_processed_audio_id = audio_id
-            with st.spinner("🧠 Transcribing your voice..."):
-                audio_bytes = recorded_audio.read()
-                transcribed_text = transcribe_audio_buffer(
-                    audio_bytes,
-                    mime_type=recorded_audio.type or "audio/webm"
-                )
 
-            if transcribed_text and transcribed_text.strip():
-                # Add user voice message
-                st.session_state.messages.append({
-                    "role": "user",
-                    "content": transcribed_text.strip()
-                })
+elif status == "thinking":
 
-                # Query Gemini directly
-                with st.spinner("🤖 Riosa is thinking..."):
-                    answer = ask_llm(transcribed_text.strip())
+    mic = "🧠"
 
-                # Generate speech audio bytes for browser/phone playback
-                audio_output_bytes = None
-                if st.session_state.enable_tts:
-                    audio_output_bytes = generate_speech_audio(answer)
+    title = "Thinking..."
 
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": answer,
-                    "audio": audio_output_bytes
-                })
+    description = (
+        "Riosa is preparing your answer."
+    )
 
-                st.rerun()
-            else:
-                st.warning("⚠️ Could not detect speech in the audio. Please speak clearly into your phone mic.")
+
+elif status == "speaking":
+
+    mic = "🔊"
+
+    title = "Speaking..."
+
+    description = (
+        "Riosa is answering you."
+    )
+
+
+else:
+
+    mic = "🎤"
+
+    title = "Ready to talk"
+
+    description = (
+        'Tap once to start. Say "exit" to finish.'
+    )
+
 
 # ============================================================
-# CONVERSATION DISPLAY
+# VOICE CARD
 # ============================================================
+
+st.html(f"""
+<div class="voice-card">
+
+    <div class="mic-wrapper">
+
+        <div class="mic">
+            {mic}
+        </div>
+
+    </div>
+
+    <div class="status">
+        {title}
+    </div>
+
+    <div class="status-description">
+        {description}
+    </div>
+
+</div>
+""")
+
+
+# ============================================================
+# CONTROL BUTTON
+# ============================================================
+
+if not st.session_state.voice_running:
+
+    if st.button(
+        "🎤   TAP TO TALK",
+        use_container_width=True
+    ):
+
+        st.session_state.voice_running = True
+
+        st.session_state.status = "listening"
+
+        engine.start()
+
+        st.rerun()
+
+else:
+
+    if st.button(
+        "🛑   END CONVERSATION",
+        use_container_width=True
+    ):
+
+        engine.stop()
+
+        st.session_state.voice_running = False
+
+        st.session_state.status = "ready"
+
+        st.rerun()
+
+
+# ============================================================
+# CONVERSATION
+# ============================================================
+
 if st.session_state.messages:
-    col_t1, col_t2 = st.columns([4, 1])
-    with col_t1:
-        st.caption("💬 Conversation")
-    with col_t2:
-        if st.button("🧹 Clear", use_container_width=True, help="Reset conversation"):
-            st.session_state.messages = []
-            clear_history()
-            st.rerun()
 
-    for idx, item in enumerate(st.session_state.messages):
-        role = item.get("role", "user")
-        content_text = html.escape(str(item.get("content", "")))
+    st.html("""
+    <div class="conversation-title">
+        💬 Conversation
+    </div>
+    """)
 
-        if role == "user":
+
+    for item in st.session_state.messages:
+
+        text = html.escape(
+            str(item["content"])
+        )
+
+
+        if item["role"] == "user":
+
             st.html(f"""
             <div class="user-bubble">
-                <div class="bubble-meta">YOU</div>
-                <div class="bubble-text">{content_text}</div>
+
+                <div class="label">
+                    YOU
+                </div>
+
+                <div class="message">
+                    {text}
+                </div>
+
             </div>
             """)
+
+
         else:
+
             st.html(f"""
             <div class="ai-bubble">
-                <div class="bubble-meta">RIOSA</div>
-                <div class="bubble-text">{content_text}</div>
+
+                <div class="label">
+                    RIOSA
+                </div>
+
+                <div class="message">
+                    {text}
+                </div>
+
             </div>
             """)
 
-            # Audio Player for spoken response (plays on phone & desktop)
-            msg_audio = item.get("audio")
-            if msg_audio:
-                # Autoplay the most recent assistant message if voice is enabled
-                is_latest = (idx == len(st.session_state.messages) - 1)
-                st.audio(
-                    msg_audio,
-                    format="audio/mp3",
-                    autoplay=is_latest and st.session_state.enable_tts
-                )
+
+# Browser speech output so voice plays through phone/device speakers too
+if (
+    st.session_state.messages
+    and st.session_state.messages[-1]["role"] == "assistant"
+    and len(st.session_state.messages) != st.session_state.last_spoken_count
+):
+    st.session_state.last_spoken_count = len(st.session_state.messages)
+    spoken_text = json.dumps(str(st.session_state.messages[-1]["content"]))
+    st.html(f"""
+    <script>
+    (function() {{
+        if ('speechSynthesis' in window) {{
+            try {{
+                window.speechSynthesis.cancel();
+                var utterance = new SpeechSynthesisUtterance({spoken_text});
+                utterance.rate = 1.0;
+                window.speechSynthesis.speak(utterance);
+            }} catch(e) {{}}
+        }}
+    }})();
+    </script>
+    """)
+
 
 # ============================================================
-# TEXT CHAT INPUT (TYPE PROMPT DIRECTLY)
+# TEXT INPUT (OPTIONAL TYPING)
 # ============================================================
-user_prompt = st.chat_input("Type your question or message to Riosa...")
-if user_prompt and user_prompt.strip():
-    clean_prompt = user_prompt.strip()
 
-    # Add user message
-    st.session_state.messages.append({
-        "role": "user",
-        "content": clean_prompt
-    })
+typed_input = st.chat_input("Or type your message here...")
+if typed_input:
+    engine.process_text(typed_input)
+    st.rerun()
 
-    # Direct Gemini Query
-    with st.spinner("🤖 Riosa is thinking..."):
-        response = ask_llm(clean_prompt)
 
-    # Generate speech audio
-    audio_output_bytes = None
-    if st.session_state.enable_tts:
-        audio_output_bytes = generate_speech_audio(response)
+# ============================================================
+# AUTO REFRESH WHILE VOICE ENGINE IS ACTIVE
+# ============================================================
 
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": response,
-        "audio": audio_output_bytes
-    })
+if st.session_state.voice_running:
+
+    time.sleep(0.5)
 
     st.rerun()
 
-st.html(f"""
-<div class="footer-text">
-    Riosa Voice AI Assistant • Deployable & Mobile Ready
+
+# ============================================================
+# HINT & FOOTER
+# ============================================================
+
+st.html("""
+<div class="hint">
+
+    🎤 Tap once to start
+    &nbsp; • &nbsp;
+    Keep talking naturally
+    &nbsp; • &nbsp;
+    Say "exit" to finish
+
+</div>
+
+<div class="footer">
+
+    Riosa • Python • Gemini • Speech Recognition • Streamlit
+
 </div>
 """)
