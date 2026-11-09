@@ -33,9 +33,8 @@ EXIT_COMMANDS = {
 # ============================================================
 class RiosaVoiceEngine:
     """
-    Background engine for interactive voice and text processing.
-    Handles microphone listening, LLM communication, TTS output,
-    and event queuing for Streamlit or CLI frontends.
+    Background voice engine for continuous PC microphone listening.
+    Communicates via thread-safe queue.
     """
 
     def __init__(self):
@@ -87,36 +86,35 @@ class RiosaVoiceEngine:
         self.events.put({"type": "stopped"})
 
     # ========================================================
-    # SPEAK
+    # SPEAK (THREAD-SAFE & NON-BLOCKING)
     # ========================================================
     def speak(self, text):
-        """Speak text aloud using pyttsx3 in a thread-safe manner."""
-        if not text or not self.speech_enabled:
+        """Speak text using pyttsx3 in a thread-safe worker."""
+        if not text or not self.speech_enabled or self.stop_event.is_set():
             return
 
-        if self.stop_event.is_set():
-            return
+        def _do_speak():
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+            except Exception:
+                pass
 
-        # Initialize COM on current thread for Windows compatibility
-        try:
-            import pythoncom
-            pythoncom.CoInitialize()
-        except Exception:
-            pass
+            try:
+                with self.engine_lock:
+                    engine = pyttsx3.init()
+                    engine.setProperty("rate", self.speech_rate)
+                    engine.setProperty("volume", self.speech_volume)
+                    engine.say(text)
+                    engine.runAndWait()
+                    engine.stop()
+            except Exception as error:
+                self.events.put({
+                    "type": "error",
+                    "message": f"TTS Error: {error}"
+                })
 
-        try:
-            with self.engine_lock:
-                engine = pyttsx3.init()
-                engine.setProperty("rate", self.speech_rate)
-                engine.setProperty("volume", self.speech_volume)
-                engine.say(text)
-                engine.runAndWait()
-                engine.stop()
-        except Exception as error:
-            self.events.put({
-                "type": "error",
-                "message": f"TTS Error: {error}"
-            })
+        threading.Thread(target=_do_speak, daemon=True).start()
 
     # ========================================================
     # LISTEN
@@ -170,71 +168,9 @@ class RiosaVoiceEngine:
             return ""
 
     def is_exit_command(self, text):
-        """Check if message is an exit command."""
         if not text:
             return False
         return text.lower().strip() in EXIT_COMMANDS
-
-    # ========================================================
-    # PROCESS DIRECT TEXT INPUT (Interactive Chat)
-    # ========================================================
-    def process_text(self, user_text):
-        """
-        Process a user text prompt synchronously.
-        Emits appropriate events and optionally speaks the answer.
-        """
-        if not user_text or not user_text.strip():
-            return None
-
-        clean_text = user_text.strip()
-
-        # Emit user message event
-        self.events.put({
-            "type": "user",
-            "message": clean_text
-        })
-
-        if self.is_exit_command(clean_text):
-            goodbye = "Goodbye! Have a wonderful day."
-            self.events.put({
-                "type": "assistant",
-                "message": goodbye
-            })
-            if self.speech_enabled:
-                self.speak(goodbye)
-            return goodbye
-
-        # Status thinking
-        self.events.put({
-            "type": "status",
-            "value": "thinking"
-        })
-
-        try:
-            response = ask_llm(clean_text)
-        except Exception as err:
-            response = f"Sorry, I encountered an issue: {err}"
-
-        # Emit assistant response
-        self.events.put({
-            "type": "assistant",
-            "message": response
-        })
-
-        # Speak if enabled
-        if self.speech_enabled:
-            self.events.put({
-                "type": "status",
-                "value": "speaking"
-            })
-            self.speak(response)
-
-        self.events.put({
-            "type": "status",
-            "value": "ready"
-        })
-
-        return response
 
     # ========================================================
     # MAIN VOICE LOOP
@@ -263,7 +199,6 @@ class RiosaVoiceEngine:
                     self.events.put({"type": "stopped"})
                     break
 
-                # Thinking
                 self.events.put({
                     "type": "status",
                     "value": "thinking"
@@ -274,20 +209,17 @@ class RiosaVoiceEngine:
                 except Exception:
                     response = "Sorry, I couldn't process that. Please try again."
 
-                # Send answer to UI
                 self.events.put({
                     "type": "assistant",
                     "message": response
                 })
 
-                # Speak
                 self.events.put({
                     "type": "status",
                     "value": "speaking"
                 })
                 self.speak(response)
 
-                # Return to listening if still active
                 if self.running and not self.stop_event.is_set():
                     self.events.put({
                         "type": "status",
@@ -297,11 +229,7 @@ class RiosaVoiceEngine:
         finally:
             self.running = False
 
-    # ========================================================
-    # GET EVENTS
-    # ========================================================
     def get_events(self):
-        """Drain and return all queued events."""
         events = []
         while True:
             try:
@@ -310,11 +238,7 @@ class RiosaVoiceEngine:
                 break
         return events
 
-    # ========================================================
-    # RESET
-    # ========================================================
     def reset(self):
-        """Reset conversation memory and engine state."""
         clear_llm_history()
         while not self.events.empty():
             try:

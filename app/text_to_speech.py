@@ -1,4 +1,5 @@
 import sys
+import threading
 import pyttsx3
 
 # Ensure UTF-8 output on Windows consoles
@@ -9,16 +10,11 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
+_tts_lock = threading.Lock()
 
-def speak(text, rate=170, volume=1.0):
-    """
-    Convert text into spoken audio using pyttsx3.
-    Safely initializes Windows COM if running in a thread.
-    """
-    if not text:
-        return
 
-    # Windows COM initialization for multithreaded environments (e.g. Streamlit)
+def _speak_worker(text, rate=170, volume=1.0):
+    """Internal worker that runs pyttsx3 safely with Windows COM initialized."""
     try:
         import pythoncom
         pythoncom.CoInitialize()
@@ -26,17 +22,37 @@ def speak(text, rate=170, volume=1.0):
         pass
 
     try:
-        engine = pyttsx3.init()
-        engine.setProperty("rate", rate)
-        engine.setProperty("volume", volume)
-        engine.say(text)
-        engine.runAndWait()
-        engine.stop()
+        with _tts_lock:
+            engine = pyttsx3.init()
+            engine.setProperty("rate", rate)
+            engine.setProperty("volume", volume)
+            engine.say(text)
+            engine.runAndWait()
+            engine.stop()
     except Exception as error:
         print(f"Text-to-speech error: {error}")
 
 
+def speak(text, rate=170, volume=1.0, async_mode=False):
+    """
+    Convert text into spoken audio.
+    If async_mode is True, speaks in a background daemon thread so it never blocks callers.
+    """
+    if not text:
+        return
+
+    if async_mode:
+        t = threading.Thread(
+            target=_speak_worker,
+            args=(text, rate, volume),
+            daemon=True
+        )
+        t.start()
+    else:
+        _speak_worker(text, rate, volume)
+
+
 if __name__ == "__main__":
     print("Testing text-to-speech...")
-    speak("Hello! I am Riosa, your interactive voice AI assistant.")
+    speak("Hello! I am Riosa, your interactive voice AI assistant.", async_mode=False)
     print("Done speaking.")
