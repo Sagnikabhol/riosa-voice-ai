@@ -18,9 +18,17 @@ load_dotenv()
 
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+            api_key = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        pass
+
+if not api_key:
     raise ValueError(
         "GEMINI_API_KEY was not found. "
-        "Please check your .env file."
+        "Please check your .env file or Streamlit Cloud Secrets."
     )
 
 # ---------------------------------------
