@@ -13,9 +13,17 @@ if hasattr(sys.stdout, "reconfigure"):
 def speak(text, rate=170, volume=1.0):
     """
     Convert text into spoken audio using pyttsx3.
+    Safely initializes Windows COM if running in a thread.
     """
     if not text:
         return
+
+    # Windows COM initialization for multithreaded environments (e.g. Streamlit)
+    try:
+        import pythoncom
+        pythoncom.CoInitialize()
+    except Exception:
+        pass
 
     try:
         engine = pyttsx3.init()

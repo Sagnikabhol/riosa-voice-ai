@@ -1,4 +1,5 @@
 import sys
+import io
 import speech_recognition as sr
 
 # Ensure UTF-8 output on Windows consoles
@@ -30,7 +31,7 @@ def is_microphone_available():
 
 def listen(timeout=5, phrase_time_limit=10):
     """
-    Listen to the microphone and convert speech to text using Google Speech Recognition.
+    Listen to the host microphone and convert speech to text using Google Speech Recognition.
     Returns the recognized string, or None if no speech was detected.
     """
     try:
@@ -74,6 +75,46 @@ def listen(timeout=5, phrase_time_limit=10):
     except Exception as error:
         print(f"❌ Speech processing error: {error}")
         return None
+
+
+def transcribe_audio_buffer(audio_bytes, mime_type="audio/wav"):
+    """
+    Transcribe recorded audio bytes (from mobile browser or web audio input).
+    First attempts SpeechRecognition WAV decoding; falls back to Gemini multimodal transcription.
+    """
+    if not audio_bytes:
+        return None
+
+    # 1. Attempt standard SpeechRecognition AudioFile
+    try:
+        buf = io.BytesIO(audio_bytes)
+        with sr.AudioFile(buf) as source:
+            recorded = recognizer.record(source)
+            text = recognizer.recognize_google(recorded)
+            if text and text.strip():
+                return text.strip()
+    except Exception:
+        pass
+
+    # 2. Fallback to Gemini multimodal audio model
+    try:
+        from llm import client, DEFAULT_MODEL
+        from google.genai import types
+
+        resolved_mime = mime_type if mime_type else "audio/wav"
+        part = types.Part.from_bytes(data=audio_bytes, mime_type=resolved_mime)
+        prompt = "Transcribe the spoken audio precisely into text. Output only the transcription, without any preamble or quotes."
+
+        response = client.models.generate_content(
+            model=DEFAULT_MODEL,
+            contents=[part, prompt]
+        )
+        if response.text and response.text.strip():
+            return response.text.strip()
+    except Exception as err:
+        print(f"Fallback audio transcription failed: {err}")
+
+    return None
 
 
 if __name__ == "__main__":

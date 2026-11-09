@@ -97,6 +97,13 @@ class RiosaVoiceEngine:
         if self.stop_event.is_set():
             return
 
+        # Initialize COM on current thread for Windows compatibility
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except Exception:
+            pass
+
         try:
             with self.engine_lock:
                 engine = pyttsx3.init()
